@@ -6,7 +6,7 @@
 
 A fancy, easy-to-use and reactive self-hosted docker compose.yaml stack-oriented manager.
 
-[![GitHub Repo stars](https://img.shields.io/github/stars/NightWatcher314/dockge?logo=github&style=flat)](https://github.com/NightWatcher314/dockge) [![Docker Pulls](https://img.shields.io/badge/image-registry.ntwc.top%2Fnightwatcher314%2Fdockge-blue)](https://github.com/NightWatcher314/dockge) [![Docker Image Version (latest semver)](https://img.shields.io/badge/version-self--hosted-blue)](https://github.com/NightWatcher314/dockge) [![GitHub last commit (branch)](https://img.shields.io/github/last-commit/NightWatcher314/dockge/master?logo=github)](https://github.com/NightWatcher314/dockge/commits/master/)
+[![GitHub Repo stars](https://img.shields.io/github/stars/NightWatcher314/dockge?logo=github&style=flat)](https://github.com/NightWatcher314/dockge) [![Container Image](https://img.shields.io/badge/image-harbor.ntwc.top%2Flocal%2Fnightwatcher314%2Fdockge-blue)](https://harbor.ntwc.top) [![Docker Image Version (latest semver)](https://img.shields.io/badge/version-1.5.1--nightwatcher.0-blue)](https://github.com/NightWatcher314/dockge/releases/tag/1.5.1-nightwatcher.0) [![GitHub last commit (branch)](https://img.shields.io/github/last-commit/NightWatcher314/dockge/master?logo=github)](https://github.com/NightWatcher314/dockge/commits/master/)
 
 <img src="https://github.com/louislam/dockge/assets/1336778/26a583e1-ecb1-4a8d-aedf-76157d714ad7" width="900" alt="" />
 
@@ -45,14 +45,14 @@ Requirements:
      - ✅ ArchLinux
   - ❌ Debian/Raspbian Buster or lower is not supported
   - ❌ Windows (Will be supported later)
-- Arch: armv7, arm64, amd64 (a.k.a x86_64)
+- Published fork image: amd64 (a.k.a x86_64)
 
 ### Basic
 
 This fork is deployed from our own GitHub repository and container image.
 
 - Repository: `https://github.com/NightWatcher314/dockge`
-- Image: `registry.ntwc.top/nightwatcher314/dockge:1`
+- Image: `harbor.ntwc.top/local/nightwatcher314/dockge:1.5.1-nightwatcher.0`
 - Default Stacks Directory: `/opt/stacks`
 - Default Port: 5001
 
@@ -72,17 +72,13 @@ Dockge is now running on http://localhost:5001
 
 ### Build From This Repository
 
-Use this when you want to build the image yourself instead of only pulling
-`registry.ntwc.top/nightwatcher314/dockge:1`. The release image depends on the
-local base and healthcheck images, so build those first.
+Use this when you want to build the amd64 image yourself instead of only pulling
+`harbor.ntwc.top/local/nightwatcher314/dockge:1.5.1-nightwatcher.0`. The
+Dockerfile uses immutable helper images published in the same Harbor project.
 
 ```bash
 git clone https://github.com/NightWatcher314/dockge.git /opt/dockge
 cd /opt/dockge
-
-# Build helper images used by docker/Dockerfile
-docker build -t registry.ntwc.top/nightwatcher314/dockge:build-healthcheck -f docker/BuildHealthCheck.Dockerfile .
-docker build -t registry.ntwc.top/nightwatcher314/dockge:base -f docker/Base.Dockerfile .
 
 # Build and start the Dockge service using the build override
 docker compose -f compose.yaml -f compose.build.yaml build dockge
@@ -119,7 +115,7 @@ compose:
 ```
 services:
   dockge:
-    image: registry.ntwc.top/nightwatcher314/dockge:1
+    image: harbor.ntwc.top/local/nightwatcher314/dockge:1.5.1-nightwatcher.0
     restart: unless-stopped
     ports:
       # Host Port:Container Port
