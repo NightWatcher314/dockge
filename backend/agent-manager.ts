@@ -2,10 +2,31 @@ import { DockgeSocket } from "./util-server";
 import { io, Socket as SocketClient } from "socket.io-client";
 import { log } from "./log";
 import { Agent } from "./models/agent";
-import { isDev, LooseObject, sleep } from "../common/util-common";
+import { isDev, LooseObject } from "../common/util-common";
 import semver from "semver";
 import { R } from "redbean-node";
-import dayjs, { Dayjs } from "dayjs";
+
+export const AGENT_READY_TIMEOUT = 10000;
+
+export type AgentManagerErrorCode = "AGENT_NOT_FOUND" | "AGENT_AUTH_FAILED" | "AGENT_NOT_READY";
+
+export class AgentManagerError extends Error {
+    code : AgentManagerErrorCode;
+
+    constructor(code : AgentManagerErrorCode, message : string) {
+        super(message);
+        this.code = code;
+    }
+}
+
+type AgentSocketFactory = typeof io;
+type AgentListLoader = typeof Agent.getAgentList;
+
+interface AgentManagerOptions {
+    agentSocketFactory? : AgentSocketFactory;
+    agentListLoader? : AgentListLoader;
+    readyTimeout? : number;
+}
 
 /**
  * Dockge Instance Manager
@@ -16,14 +37,17 @@ export class AgentManager {
     protected socket : DockgeSocket;
     protected agentSocketList : Record<string, SocketClient> = {};
     protected agentLoggedInList : Record<string, boolean> = {};
-    protected _firstConnectTime : Dayjs = dayjs();
+    protected agentLoginFailureList : Record<string, AgentManagerError | undefined> = {};
+    protected agentSocketFactory : AgentSocketFactory;
+    protected agentListLoader : AgentListLoader;
+    protected readyTimeout : number;
+    protected agentListPromise? : Promise<Record<string, Agent>>;
 
-    constructor(socket: DockgeSocket) {
+    constructor(socket: DockgeSocket, options : AgentManagerOptions = {}) {
         this.socket = socket;
-    }
-
-    get firstConnectTime() : Dayjs {
-        return this._firstConnectTime;
+        this.agentSocketFactory = options.agentSocketFactory || io;
+        this.agentListLoader = options.agentListLoader || Agent.getAgentList;
+        this.readyTimeout = options.readyTimeout ?? AGENT_READY_TIMEOUT;
     }
 
     test(url : string, username : string, password : string) : Promise<void> {
@@ -39,7 +63,7 @@ export class AgentManager {
                 reject(new Error("The Dockge URL already exists"));
             }
 
-            let client = io(url, {
+            let client = this.agentSocketFactory(url, {
                 reconnection: false,
                 extraHeaders: {
                     endpoint,
@@ -145,11 +169,14 @@ export class AgentManager {
         }
 
         log.info("agent-manager", "Connecting to the socket server: " + endpoint);
-        let client = io(url, {
+        let client = this.agentSocketFactory(url, {
             extraHeaders: {
                 endpoint,
             }
         });
+        this.agentSocketList[endpoint] = client;
+        this.agentLoggedInList[endpoint] = false;
+        delete this.agentLoginFailureList[endpoint];
 
         client.on("connect", () => {
             log.info("agent-manager", "Connected to the socket server: " + endpoint);
@@ -161,6 +188,7 @@ export class AgentManager {
                 if (res.ok) {
                     log.info("agent-manager", "Logged in to the socket server: " + endpoint);
                     this.agentLoggedInList[endpoint] = true;
+                    delete this.agentLoginFailureList[endpoint];
                     this.socket.emit("agentStatus", {
                         endpoint: endpoint,
                         status: "online",
@@ -168,9 +196,14 @@ export class AgentManager {
                 } else {
                     log.error("agent-manager", "Failed to login to the socket server: " + endpoint);
                     this.agentLoggedInList[endpoint] = false;
+                    this.agentLoginFailureList[endpoint] = new AgentManagerError(
+                        "AGENT_AUTH_FAILED",
+                        "Failed to authenticate with agent endpoint: " + endpoint
+                    );
                     this.socket.emit("agentStatus", {
                         endpoint: endpoint,
                         status: "offline",
+                        msg: res.msg,
                     });
                 }
             });
@@ -186,6 +219,7 @@ export class AgentManager {
 
         client.on("disconnect", () => {
             log.info("agent-manager", "Disconnected from the socket server: " + endpoint);
+            this.agentLoggedInList[endpoint] = false;
             this.socket.emit("agentStatus", {
                 endpoint: endpoint,
                 status: "offline",
@@ -210,7 +244,6 @@ export class AgentManager {
             }
         });
 
-        this.agentSocketList[endpoint] = client;
     }
 
     disconnect(endpoint : string) {
@@ -219,14 +252,12 @@ export class AgentManager {
     }
 
     async connectAll() {
-        this._firstConnectTime = dayjs();
-
         if (this.socket.endpoint) {
             log.info("agent-manager", "This connection is connected as an agent, skip connectAll()");
             return;
         }
 
-        let list : Record<string, Agent> = await Agent.getAgentList();
+        const list = await this.loadAgentList();
 
         if (Object.keys(list).length !== 0) {
             log.info("agent-manager", "Connecting to all instance socket server(s)...");
@@ -238,43 +269,61 @@ export class AgentManager {
         }
     }
 
+    protected loadAgentList() : Promise<Record<string, Agent>> {
+        if (!this.agentListPromise) {
+            this.agentListPromise = this.agentListLoader().finally(() => {
+                this.agentListPromise = undefined;
+            });
+        }
+        return this.agentListPromise;
+    }
+
     disconnectAll() {
         for (let endpoint in this.agentSocketList) {
             this.disconnect(endpoint);
         }
     }
 
+    async ensureEndpointReady(endpoint : string) : Promise<SocketClient> {
+        let client = this.agentSocketList[endpoint];
+        if (!client) {
+            const list = await this.loadAgentList();
+            const agent = list[endpoint];
+            if (!agent) {
+                throw new AgentManagerError(
+                    "AGENT_NOT_FOUND",
+                    "Agent endpoint is not configured: " + endpoint
+                );
+            }
+
+            this.connect(agent.url, agent.username, agent.password);
+            client = this.agentSocketList[endpoint];
+        }
+
+        const startedAt = Date.now();
+        while (!client.connected || !this.agentLoggedInList[endpoint]) {
+            const loginFailure = this.agentLoginFailureList[endpoint];
+            if (loginFailure) {
+                throw loginFailure;
+            }
+
+            if (Date.now() - startedAt >= this.readyTimeout) {
+                throw new AgentManagerError(
+                    "AGENT_NOT_READY",
+                    "Agent endpoint did not become ready within " + this.readyTimeout + "ms: " + endpoint
+                );
+            }
+
+            await new Promise((resolve) => setTimeout(resolve, Math.min(50, this.readyTimeout)));
+            client = this.agentSocketList[endpoint];
+        }
+
+        return client;
+    }
+
     async emitToEndpoint(endpoint: string, eventName: string, ...args : unknown[]) {
         log.debug("agent-manager", "Emitting event to endpoint: " + endpoint);
-        let client = this.agentSocketList[endpoint];
-
-        if (!client) {
-            log.error("agent-manager", "Socket client not found for endpoint: " + endpoint);
-            throw new Error("Socket client not found for endpoint: " + endpoint);
-        }
-
-        if (!client.connected || !this.agentLoggedInList[endpoint]) {
-            // Maybe the request is too quick, the socket is not connected yet, check firstConnectTime
-            // If it is within 10 seconds, we should apply retry logic here
-            let diff = dayjs().diff(this.firstConnectTime, "second");
-            log.debug("agent-manager", endpoint + ": diff: " + diff);
-            let ok = false;
-            while (diff < 10) {
-                if (client.connected && this.agentLoggedInList[endpoint]) {
-                    log.debug("agent-manager", `${endpoint}: Connected & Logged in`);
-                    ok = true;
-                    break;
-                }
-                log.debug("agent-manager", endpoint + ": not ready yet, retrying in 1 second...");
-                await sleep(1000);
-                diff = dayjs().diff(this.firstConnectTime, "second");
-            }
-
-            if (!ok) {
-                log.error("agent-manager", `${endpoint}: Socket client not connected`);
-                throw new Error("Socket client not connected for endpoint: " + endpoint);
-            }
-        }
+        const client = await this.ensureEndpointReady(endpoint);
 
         client.emit("agent", endpoint, eventName, ...args);
     }

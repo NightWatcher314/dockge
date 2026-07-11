@@ -4,7 +4,7 @@ import { SocketHandler } from "../socket-handler.js";
 import { DockgeServer } from "../dockge-server";
 import { log } from "../log";
 import { R } from "redbean-node";
-import { loginRateLimiter, twoFaRateLimiter } from "../rate-limiter";
+import { loginRateLimiter } from "../rate-limiter";
 import { generatePasswordHash, needRehashPassword, shake256, SHAKE256_LENGTH, verifyPassword } from "../password-hash";
 import { User } from "../models/user";
 import {
@@ -20,6 +20,30 @@ import jwt from "jsonwebtoken";
 import { Settings } from "../settings";
 import fs, { promises as fsAsync } from "fs";
 import path from "path";
+import type { LoginRateLimiter, LoginRateLimitReservation } from "../rate-limiter";
+
+export function getLoginRateLimitKeys(clientIP : string, username : unknown) {
+    const normalizedUsername = typeof username === "string" ? username.trim().toLowerCase() : "";
+    return {
+        account: clientIP + "\n" + normalizedUsername,
+        source: clientIP,
+    };
+}
+
+export async function completeSuccessfulLogin(
+    server : DockgeServer,
+    socket : DockgeSocket,
+    user : User,
+    loginAttempt : LoginRateLimitReservation,
+    finalize? : () => Promise<void>,
+    rateLimiter : Pick<LoginRateLimiter, "complete"> = loginRateLimiter
+) {
+    if (finalize) {
+        await finalize();
+    }
+    await server.afterLogin(socket, user);
+    rateLimiter.complete(loginAttempt, "authenticated");
+}
 
 export class MainSocketHandler extends SocketHandler {
     create(socket : DockgeSocket, server : DockgeServer) {
@@ -135,8 +159,15 @@ export class MainSocketHandler extends SocketHandler {
                 return;
             }
 
-            // Login Rate Limit
-            if (!await loginRateLimiter.pass(callback)) {
+            // Reserve an attempt before checking credentials so concurrent brute-force
+            // attempts cannot race past the limiter. Successful password checks release it.
+            const loginRateLimitKeys = getLoginRateLimitKeys(clientIP, data.username);
+            const loginAttempt = loginRateLimiter.reserve(
+                loginRateLimitKeys.account,
+                loginRateLimitKeys.source,
+                callback
+            );
+            if (loginAttempt === null) {
                 log.info("auth", `Too many failed requests for user ${data.username}. IP=${clientIP}`);
                 return;
             }
@@ -145,7 +176,7 @@ export class MainSocketHandler extends SocketHandler {
 
             if (user) {
                 if (user.twofa_status === 0) {
-                    server.afterLogin(socket, user);
+                    await completeSuccessfulLogin(server, socket, user, loginAttempt);
 
                     log.info("auth", `Successfully logged in user ${data.username}. IP=${clientIP}`);
 
@@ -156,6 +187,7 @@ export class MainSocketHandler extends SocketHandler {
                 }
 
                 if (user.twofa_status === 1 && !data.token) {
+                    loginRateLimiter.complete(loginAttempt, "challenge-required");
 
                     log.info("auth", `2FA token required for user ${data.username}. IP=${clientIP}`);
 
@@ -164,17 +196,17 @@ export class MainSocketHandler extends SocketHandler {
                     });
                 }
 
-                if (data.token) {
+                if (user.twofa_status === 1 && data.token) {
                     // @ts-ignore
                     const verify = notp.totp.verify(data.token, user.twofa_secret, twoFAVerifyOptions);
 
                     if (user.twofa_last_token !== data.token && verify) {
-                        server.afterLogin(socket, user);
-
-                        await R.exec("UPDATE `user` SET twofa_last_token = ? WHERE id = ? ", [
-                            data.token,
-                            socket.userID,
-                        ]);
+                        await completeSuccessfulLogin(server, socket, user, loginAttempt, async () => {
+                            await R.exec("UPDATE `user` SET twofa_last_token = ? WHERE id = ? ", [
+                                data.token,
+                                user.id,
+                            ]);
+                        });
 
                         log.info("auth", `Successfully logged in user ${data.username}. IP=${clientIP}`);
 
@@ -183,6 +215,7 @@ export class MainSocketHandler extends SocketHandler {
                             token: User.createJWT(user, server.jwtSecret),
                         });
                     } else {
+                        loginRateLimiter.complete(loginAttempt, "failed");
 
                         log.warn("auth", `Invalid token provided for user ${data.username}. IP=${clientIP}`);
 

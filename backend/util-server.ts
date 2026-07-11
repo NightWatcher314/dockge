@@ -7,6 +7,7 @@ import { R } from "redbean-node";
 import { verifyPassword } from "./password-hash";
 import fs from "fs";
 import { AgentManager } from "./agent-manager";
+import type { DockgeClientType } from "./agent-connection-mode";
 
 export interface JWTDecoded {
     username : string;
@@ -18,6 +19,7 @@ export interface DockgeSocket extends Socket {
     consoleTerminal? : Terminal;
     instanceManager : AgentManager;
     endpoint : string;
+    clientType : DockgeClientType;
     emitAgent : (eventName : string, ...args : unknown[]) => void;
 }
 

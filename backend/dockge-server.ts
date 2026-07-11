@@ -37,6 +37,11 @@ import { AgentSocketHandler } from "./agent-socket-handler";
 import { AgentSocket } from "../common/agent-socket";
 import { ManageAgentSocketHandler } from "./socket-handlers/manage-agent-socket-handler";
 import { Terminal } from "./terminal";
+import {
+    getAgentConnectionMode,
+    getDockgeClientType,
+    shouldEagerConnectAgents
+} from "./agent-connection-mode";
 
 export class DockgeServer {
     app : Express;
@@ -266,6 +271,8 @@ export class DockgeServer {
                 dockgeSocket.endpoint = "";
             }
 
+            dockgeSocket.clientType = getDockgeClientType(dockgeSocket.endpoint, socket.handshake.auth);
+
             if (dockgeSocket.endpoint) {
                 log.info("server", "Socket connected (agent), as endpoint " + dockgeSocket.endpoint);
             } else {
@@ -341,8 +348,11 @@ export class DockgeServer {
 
         socket.instanceManager.sendAgentList();
 
-        // Also connect to other dockge instances
-        socket.instanceManager.connectAll();
+        // Browser sessions display live status for every agent. Short-lived CLI
+        // sessions connect only the endpoint named by their first proxy request.
+        if (shouldEagerConnectAgents(socket.clientType)) {
+            socket.instanceManager.connectAll();
+        }
     }
 
     /**
@@ -438,6 +448,7 @@ export class DockgeServer {
             version: versionProperty,
             latestVersion: latestVersionProperty,
             isContainer,
+            agentConnectionMode: getAgentConnectionMode((socket as DockgeSocket).clientType),
             primaryHostname: await Settings.get("primaryHostname"),
             //serverTimezone: await this.getTimezone(),
             //serverTimezoneOffset: this.getTimezoneOffset(),

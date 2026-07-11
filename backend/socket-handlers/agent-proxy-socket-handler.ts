@@ -4,6 +4,20 @@ import { log } from "../log";
 import { checkLogin, DockgeSocket } from "../util-server";
 import { AgentSocket } from "../../common/agent-socket";
 import { ALL_ENDPOINTS } from "../../common/util-common";
+import { AgentManagerError } from "../agent-manager";
+
+type AgentProxyErrorCode = "AGENT_NOT_FOUND" | "AGENT_NOT_READY" | "AGENT_AUTH_FAILED" | "AGENT_PROXY_ERROR";
+
+function acknowledgeProxyError(args : unknown[], code : AgentProxyErrorCode, msg : string) {
+    const callback = args.at(-1);
+    if (typeof callback === "function") {
+        callback({
+            ok: false,
+            code,
+            msg,
+        });
+    }
+}
 
 export class AgentProxySocketHandler extends SocketHandler {
 
@@ -36,6 +50,10 @@ export class AgentProxySocketHandler extends SocketHandler {
             } catch (e) {
                 if (e instanceof Error) {
                     log.warn("agent", e.message);
+                    const code = e instanceof AgentManagerError ? e.code : "AGENT_PROXY_ERROR";
+                    acknowledgeProxyError(args, code, e.message);
+                } else {
+                    acknowledgeProxyError(args, "AGENT_PROXY_ERROR", "Unknown agent proxy error");
                 }
             }
         });
