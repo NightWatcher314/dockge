@@ -1,6 +1,6 @@
 services:
   dockge:
-    image: harbor.ntwc.top/local/nightwatcher314/dockge:1.5.1-nightwatcher.0
+    image: harbor.iprc.top/local/nightwatcher314/dockge:1.5.1-nightwatcher.0
     restart: unless-stopped
     ports:
       # Host Port : Container Port
