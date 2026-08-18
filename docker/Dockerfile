@@ -1,12 +1,12 @@
 ############################################
 # Healthcheck Binary
 ############################################
-FROM harbor.iprc.top/local/nightwatcher314/dockge:build-healthcheck-amd64-39673238c011 AS build_healthcheck
+FROM harbor.iprc.top/zhengzifu/dockge:build-healthcheck-amd64-39673238c011 AS build_healthcheck
 
 ############################################
 # Build
 ############################################
-FROM harbor.iprc.top/local/nightwatcher314/dockge:base-amd64-47af67a8f353 AS build
+FROM harbor.iprc.top/zhengzifu/dockge:base-amd64-47af67a8f353 AS build
 WORKDIR /app
 COPY --chown=node:node  ./package.json ./package.json
 COPY --chown=node:node  ./package-lock.json ./package-lock.json
@@ -15,7 +15,7 @@ RUN npm ci --omit=dev
 ############################################
 # ⭐ Main Image
 ############################################
-FROM harbor.iprc.top/local/nightwatcher314/dockge:base-amd64-47af67a8f353 AS release
+FROM harbor.iprc.top/zhengzifu/dockge:base-amd64-47af67a8f353 AS release
 WORKDIR /app
 COPY --chown=node:node --from=build_healthcheck /app/extra/healthcheck /app/extra/healthcheck
 COPY --from=build /app/node_modules /app/node_modules

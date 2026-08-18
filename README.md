@@ -6,7 +6,7 @@
 
 A fancy, easy-to-use and reactive self-hosted docker compose.yaml stack-oriented manager.
 
-[![GitHub Repo stars](https://img.shields.io/github/stars/NightWatcher314/dockge?logo=github&style=flat)](https://github.com/NightWatcher314/dockge) [![Container Image](https://img.shields.io/badge/image-harbor.iprc.top%2Flocal%2Fnightwatcher314%2Fdockge-blue)](https://harbor.iprc.top) [![Docker Image Version (latest semver)](https://img.shields.io/badge/version-1.5.1--nightwatcher.0-blue)](https://github.com/NightWatcher314/dockge/releases/tag/1.5.1-nightwatcher.0) [![GitHub last commit (branch)](https://img.shields.io/github/last-commit/NightWatcher314/dockge/master?logo=github)](https://github.com/NightWatcher314/dockge/commits/master/)
+[![GitHub Repo stars](https://img.shields.io/github/stars/NightWatcher314/dockge?logo=github&style=flat)](https://github.com/NightWatcher314/dockge) [![Container Image](https://img.shields.io/badge/image-harbor.iprc.top%2Fzhengzifu%2Fdockge-blue)](https://harbor.iprc.top) [![Docker Image Version (latest semver)](https://img.shields.io/badge/version-1.5.1--nightwatcher.0-blue)](https://github.com/NightWatcher314/dockge/releases/tag/1.5.1-nightwatcher.0) [![GitHub last commit (branch)](https://img.shields.io/github/last-commit/NightWatcher314/dockge/master?logo=github)](https://github.com/NightWatcher314/dockge/commits/master/)
 
 <img src="https://github.com/louislam/dockge/assets/1336778/26a583e1-ecb1-4a8d-aedf-76157d714ad7" width="900" alt="" />
 
@@ -52,7 +52,7 @@ Requirements:
 This fork is deployed from our own GitHub repository and container image.
 
 - Repository: `https://github.com/NightWatcher314/dockge`
-- Image: `harbor.iprc.top/local/nightwatcher314/dockge:1.5.1-nightwatcher.0`
+- Image: `harbor.iprc.top/zhengzifu/dockge:1.5.1-nightwatcher.0`
 - Default Stacks Directory: `/opt/stacks`
 - Default Port: 5001
 
@@ -73,7 +73,7 @@ Dockge is now running on http://localhost:5001
 ### Build From This Repository
 
 Use this when you want to build the amd64 image yourself instead of only pulling
-`harbor.iprc.top/local/nightwatcher314/dockge:1.5.1-nightwatcher.0`. The
+`harbor.iprc.top/zhengzifu/dockge:1.5.1-nightwatcher.0`. The
 Dockerfile uses immutable helper images published in the same Harbor project.
 
 ```bash
@@ -115,7 +115,7 @@ compose:
 ```
 services:
   dockge:
-    image: harbor.iprc.top/local/nightwatcher314/dockge:1.5.1-nightwatcher.0
+    image: harbor.iprc.top/zhengzifu/dockge:1.5.1-nightwatcher.0
     restart: unless-stopped
     ports:
       # Host Port:Container Port
