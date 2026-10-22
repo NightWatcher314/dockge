@@ -19,6 +19,7 @@ before(async () => {
     const app = express();
     app.use(createMcpRouter({
         version: "test",
+        allowedHosts: [ "127.0.0.1", "example.test:80", "secure.test:443" ],
         authenticate: async (token) => {
             authenticatedRequests++;
             return token === "test-key" && !revoked ? { id: 1,
@@ -154,4 +155,31 @@ test("cross-origin browser requests and malformed secret-bearing JSON fail safel
     assert.doesNotMatch(await malformed.text(), /must-not-leak/);
     const get = await fetch(url, { headers: { Authorization: "Bearer test-key" } });
     assert.equal(get.status, 405);
+});
+
+test("HTTP authority checks normalize default ports without admitting malformed or unapproved hosts", async () => {
+    async function status(host: string, origin?: string) {
+        return new Promise<number | undefined>((resolve, reject) => {
+            const req = request(url, {
+                method: "GET",
+                headers: { Authorization: "Bearer test-key",
+                    Host: host,
+                    ...(origin ? { Origin: origin } : {}) },
+            }, (response) => {
+                response.resume();
+                resolve(response.statusCode);
+            });
+            req.on("error", reject);
+            req.end();
+        });
+    }
+    // 405 confirms Host, Origin and authentication passed before the POST-only route.
+    assert.equal(await status("example.test:80"), 405);
+    assert.equal(await status("example.test:80", "http://example.test"), 405);
+    assert.equal(await status("example.test", "http://example.test:80"), 405);
+    assert.equal(await status("secure.test:443", "https://secure.test"), 405);
+    assert.equal(await status("example.test:80", "https://example.test"), 403);
+    for (const host of [ "attacker.invalid:80", "example.test:8080", "user@example.test:80", "example.test:80/path", "example.test:80?query", "example.test:80#fragment", "example.test:80\\path", "example.test:080" ]) {
+        assert.equal(await status(host), 403, host);
+    }
 });

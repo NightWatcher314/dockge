@@ -24,7 +24,11 @@ export function createMcpRouter(options: McpRouterOptions): Router {
         try {
             const host = req.headers.host || "";
             const parsed = new URL("http://" + host);
-            if (parsed.host !== host.toLowerCase() || parsed.username || parsed.password || ![ parsed.host, parsed.hostname ].some((value) => allowedHosts.has(value))) {
+            // URL strips the HTTP default port; permit its explicit canonical
+            // spelling without accepting userinfo, paths or other normalization.
+            const canonicalHost = parsed.host === host.toLowerCase() || (!parsed.port && host.toLowerCase() === `${parsed.hostname}:80`);
+            const authorities = [ parsed.host, parsed.hostname, `${parsed.hostname}:${parsed.port || "80"}` ];
+            if (!canonicalHost || parsed.username || parsed.password || !authorities.some((value) => allowedHosts.has(value))) {
                 throw new Error();
             }
         } catch {
@@ -35,7 +39,7 @@ export function createMcpRouter(options: McpRouterOptions): Router {
         if (req.headers.origin) {
             try {
                 const origin = new URL(req.headers.origin);
-                if (![ "http:", "https:" ].includes(origin.protocol) || origin.host !== req.headers.host) {
+                if (![ "http:", "https:" ].includes(origin.protocol) || origin.host !== new URL(`${origin.protocol}//${req.headers.host}`).host) {
                     res.status(403).json({ error: "Origin is not allowed" });
                     return;
                 }
