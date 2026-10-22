@@ -20,6 +20,7 @@ import { InteractiveTerminal, Terminal } from "./terminal";
 import childProcessAsync from "promisify-child-process";
 import { Settings } from "./settings";
 import { writeStackFiles } from "./stack-files";
+import { execFile } from "node:child_process";
 
 export class Stack {
 
@@ -104,6 +105,32 @@ export class Stack {
         return JSON.parse(res.stdout.toString());
     }
 
+    /** One bounded, non-streaming log request; no terminal session or shell. */
+    async boundedLogs(tail = 200, since?: string) : Promise<string> {
+        if (!Number.isInteger(tail) || tail < 0 || tail > 1000 || (since !== undefined && !Number.isFinite(Date.parse(since)))) {
+            throw new ValidationError("Invalid log options");
+        }
+        const args = this.getComposeOptions("logs", "--no-color", "--timestamps", "--tail", String(tail));
+        if (since !== undefined) {
+            args.push("--since", new Date(since).toISOString());
+        }
+        return new Promise((resolve, reject) => {
+            execFile("docker", args, {
+                cwd: this.path,
+                encoding: "utf8",
+                timeout: 10000,
+                maxBuffer: 1024 * 1024,
+                killSignal: "SIGKILL",
+            }, (error, stdout) => {
+                if (error) {
+                    reject(error);
+                } else {
+                    resolve(stdout);
+                }
+            });
+        });
+    }
+
     get isManagedByDockge() : boolean {
         return fs.existsSync(this.path) && fs.statSync(this.path).isDirectory();
     }
@@ -175,8 +202,9 @@ export class Stack {
     /**
      * Save the stack to the disk
      * @param isAdd
+     * @param beforeWrite Optional synchronous concurrency gate after filesystem checks.
      */
-    async save(isAdd : boolean) {
+    async save(isAdd : boolean, beforeWrite? : () => void) {
         this.validate();
 
         let dir = this.path;
@@ -187,12 +215,15 @@ export class Stack {
                 throw new ValidationError("Stack name already exists");
             }
 
+            beforeWrite?.();
+
             // Create the stack folder
             await fsAsync.mkdir(dir);
         } else {
             if (!await fileExists(dir)) {
                 throw new ValidationError("Stack not found");
             }
+            beforeWrite?.();
         }
 
         // Write or overwrite the compose.yaml and stack .env.
@@ -506,14 +537,23 @@ export class Stack {
         terminal.start();
     }
 
-    async getServiceStatusList() {
+    async getServiceStatusList(strict = false) {
         let statusList = new Map<string, Array<object>>();
 
         try {
             let res = await childProcessAsync.spawn("docker", this.getComposeOptions("ps", "--format", "json"), {
                 cwd: this.path,
                 encoding: "utf-8",
+                ...(strict ? {
+                    timeout: 10000,
+                    maxBuffer: 1024 * 1024,
+                    killSignal: "SIGKILL",
+                } : {}),
             });
+
+            if (strict && res.code !== 0) {
+                throw new Error("Failed to get service status");
+            }
 
             if (!res.stdout) {
                 return statusList;
@@ -522,6 +562,9 @@ export class Stack {
             let lines = res.stdout?.toString().split("\n");
 
             const addLine = (obj: { Service: string, State: string, Name: string, Health: string }) => {
+                if (strict && (!obj || typeof obj.Service !== "string" || typeof obj.State !== "string" || typeof obj.Name !== "string")) {
+                    throw new Error("Invalid service status response");
+                }
                 if (!statusList.has(obj.Service)) {
                     statusList.set(obj.Service, []);
                 }
@@ -540,11 +583,17 @@ export class Stack {
                         addLine(obj);
                     }
                 } catch (e) {
+                    if (strict && line.trim()) {
+                        throw new Error("Invalid service status response");
+                    }
                 }
             }
 
             return statusList;
         } catch (e) {
+            if (strict) {
+                throw e;
+            }
             log.error("getServiceStatusList", e);
             return statusList;
         }

@@ -1,5 +1,8 @@
 import "dotenv/config";
 import { MainRouter } from "./routers/main-router";
+import { createMcpRouter } from "./mcp-router";
+import { McpGateway, safeMcpError } from "./mcp-gateway";
+import { McpSocketHandler } from "./agent-socket-handlers/mcp-socket-handler";
 import * as fs from "node:fs";
 import { PackageJson } from "type-fest";
 import { Database } from "./database";
@@ -74,6 +77,7 @@ export class DockgeServer {
     agentSocketHandlerList : AgentSocketHandler[] = [
         new DockerSocketHandler(),
         new TerminalSocketHandler(),
+        new McpSocketHandler(),
     ];
 
     /**
@@ -193,6 +197,12 @@ export class DockgeServer {
         }
 
         // Binding Routers
+        const mcpGateway = new McpGateway(this);
+        this.app.use(createMcpRouter({
+            version: String(this.packageJSON.version),
+            execute: mcpGateway.execute.bind(mcpGateway),
+            safeError: safeMcpError,
+        }));
         for (const router of this.routerList) {
             this.app.use(router.create(this.app, this));
         }
@@ -335,6 +345,7 @@ export class DockgeServer {
     }
 
     async afterLogin(socket : DockgeSocket, user : User) {
+        socket.data.mcpKeyManagementSession = false;
         socket.userID = user.id;
         socket.join(user.id.toString());
 

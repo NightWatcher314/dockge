@@ -21,6 +21,7 @@ import { Settings } from "../settings";
 import fs, { promises as fsAsync } from "fs";
 import path from "path";
 import type { LoginRateLimiter, LoginRateLimitReservation } from "../rate-limiter";
+import { createMcpApiKey, listMcpApiKeys, revokeMcpApiKey } from "../mcp-api-keys";
 
 export function getLoginRateLimitKeys(clientIP : string, username : unknown) {
     const normalizedUsername = typeof username === "string" ? username.trim().toLowerCase() : "";
@@ -42,6 +43,10 @@ export async function completeSuccessfulLogin(
         await finalize();
     }
     await server.afterLogin(socket, user);
+    socket.data = {
+        ...socket.data,
+        mcpKeyManagementSession: true,
+    };
     rateLimiter.complete(loginAttempt, "authenticated");
 }
 
@@ -109,6 +114,7 @@ export class MainSocketHandler extends SocketHandler {
 
                     log.debug("auth", "afterLogin");
                     await server.afterLogin(socket, user);
+                    socket.data.mcpKeyManagementSession = true;
                     log.debug("auth", "afterLogin ok");
 
                     log.info("auth", `Successfully logged in user ${decoded.username}. IP=${clientIP}`);
@@ -239,6 +245,19 @@ export class MainSocketHandler extends SocketHandler {
 
         });
 
+        // Logout without closing the connection used by the login form.
+        socket.on("logout", (callback) => {
+            socket.data.mcpKeyManagementSession = false;
+            if (socket.userID) {
+                socket.leave(socket.userID.toString());
+            }
+            socket.userID = 0;
+            socket.instanceManager.disconnectAll();
+            if (typeof callback === "function") {
+                callback({ ok: true });
+            }
+        });
+
         // Change Password
         socket.on("changePassword", async (password, callback) => {
             try {
@@ -269,6 +288,57 @@ export class MainSocketHandler extends SocketHandler {
                         msg: e.message,
                     });
                 }
+            }
+        });
+
+        // MCP credentials are managed only from an authenticated web session.
+        const checkMcpKeyManagement = async () => {
+            checkLogin(socket);
+            if (socket.data.mcpKeyManagementSession !== true) {
+                throw new Error("Sign in before managing MCP API keys.");
+            }
+            if (await Settings.get("disableAuth")) {
+                throw new Error("Enable authentication before managing MCP API keys.");
+            }
+            if (!await R.knex("user").where({
+                id: socket.userID,
+                active: 1,
+            }).first("id")) {
+                throw new Error("User is inactive or deleted.");
+            }
+        };
+
+        socket.on("listMcpApiKeys", async (callback) => {
+            try {
+                await checkMcpKeyManagement();
+                callback({
+                    ok: true,
+                    keys: await listMcpApiKeys(socket.userID),
+                });
+            } catch (e) {
+                callbackError(e, callback);
+            }
+        });
+
+        socket.on("createMcpApiKey", async (data, callback) => {
+            try {
+                await checkMcpKeyManagement();
+                callback({
+                    ok: true,
+                    ...await createMcpApiKey(socket.userID, data),
+                });
+            } catch (e) {
+                callbackError(e, callback);
+            }
+        });
+
+        socket.on("revokeMcpApiKey", async (id, callback) => {
+            try {
+                await checkMcpKeyManagement();
+                await revokeMcpApiKey(socket.userID, id);
+                callback({ ok: true });
+            } catch (e) {
+                callbackError(e, callback);
             }
         });
 
