@@ -82,7 +82,7 @@
 <script>
 import Confirm from "../components/Confirm.vue";
 import StackListItem from "../components/StackListItem.vue";
-import { CREATED_FILE, CREATED_STACK, EXITED, RUNNING, UNKNOWN } from "../../../common/util-common";
+import { COMPLETED, CREATED_FILE, CREATED_STACK, EXITED, PARTIAL, RUNNING, STARTING, UNHEALTHY, UNKNOWN } from "../../../common/util-common";
 
 export default {
     components: {
@@ -180,27 +180,8 @@ export default {
 
                 // sort by status
                 if (m1.status !== m2.status) {
-                    if (m2.status === RUNNING) {
-                        return 1;
-                    } else if (m1.status === RUNNING) {
-                        return -1;
-                    } else if (m2.status === EXITED) {
-                        return 1;
-                    } else if (m1.status === EXITED) {
-                        return -1;
-                    } else if (m2.status === CREATED_STACK) {
-                        return 1;
-                    } else if (m1.status === CREATED_STACK) {
-                        return -1;
-                    } else if (m2.status === CREATED_FILE) {
-                        return 1;
-                    } else if (m1.status === CREATED_FILE) {
-                        return -1;
-                    } else if (m2.status === UNKNOWN) {
-                        return 1;
-                    } else if (m1.status === UNKNOWN) {
-                        return -1;
-                    }
+                    const order = [ RUNNING, COMPLETED, UNHEALTHY, PARTIAL, STARTING, EXITED, CREATED_STACK, CREATED_FILE, UNKNOWN ];
+                    return order.indexOf(m1.status) - order.indexOf(m2.status);
                 }
                 return m1.name.localeCompare(m2.name);
             });

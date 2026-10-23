@@ -192,7 +192,7 @@
 <script>
 import { defineComponent } from "vue";
 import { FontAwesomeIcon } from "@fortawesome/vue-fontawesome";
-import { parseDockerPort } from "../../../common/util-common";
+import { aggregateServiceStatus, parseDockerPort } from "../../../common/util-common";
 import DockerStat from "./DockerStat.vue";
 
 export default defineComponent({
@@ -244,10 +244,12 @@ export default defineComponent({
         },
 
         bgStyle() {
-            if (this.status === "running" || this.status === "healthy") {
+            if ([ "running", "healthy", "completed" ].includes(this.status)) {
                 return "bg-primary";
             } else if (this.status === "unhealthy") {
                 return "bg-danger";
+            } else if ([ "starting", "paused" ].includes(this.status)) {
+                return "bg-warning";
             } else {
                 return "bg-secondary";
             }
@@ -349,7 +351,7 @@ export default defineComponent({
             if (!this.serviceStatus) {
                 return "N/A";
             }
-            return this.serviceStatus[0].status;
+            return aggregateServiceStatus(this.serviceStatus.map((container) => container.status));
         }
     },
     mounted() {

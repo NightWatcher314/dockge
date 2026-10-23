@@ -28,6 +28,7 @@ async function context(t: TestContext, existing = true) {
     const server = { stacksDir: dir,
         packageJSON: { version: "test" } } as DockgeServer;
     const service = new McpService(server);
+    t.mock.method(Stack.prototype, "updateStatus", async () => {});
     t.mock.method(Stack.prototype, "getServiceStatusList", async () => new Map([
         [ "web.api", [{ name: "test-web-1",
             status: "running",
@@ -239,8 +240,17 @@ test("strict service status detects nonzero Docker exit and malformed output", a
     const options = (processMock.mock.calls[0].arguments as unknown as [string, string[], { timeout: number; maxBuffer: number }])[2];
     assert.equal(options.timeout, 10000);
     assert.equal(options.maxBuffer, 1024 * 1024);
-    t.mock.method(childProcessAsync, "spawn", (() => Promise.resolve({ code: 0,
-        stdout: "{\"Service\":\"web.api\",\"State\":\"running\",\"Name\":\"web-1\",\"Health\":\"healthy\",\"Env\":\"hidden\"}\n" })) as never);
+    t.mock.method(childProcessAsync, "spawn", (async (_command: string, args: string[]) => ({ code: 0,
+        stdout: args[0] === "ps" ? "abc123\n" : JSON.stringify({ project: "test",
+            service: "web.api",
+            name: "/web-1",
+            oneoff: "False",
+            task: "",
+            state: "running",
+            health: "healthy",
+            exitCode: 0,
+            oom: false,
+            error: false }) + "\n" })) as never);
     assert.deepEqual((await service.execute("service_status", { name: "test" }, identity)).services, [{ service: "web.api",
         containers: [{ name: "web-1",
             status: "healthy" }] }]);

@@ -51,6 +51,20 @@ export const CREATED_FILE = 1;
 export const CREATED_STACK = 2;
 export const RUNNING = 3;
 export const EXITED = 4;
+export const COMPLETED = 5;
+export const PARTIAL = 6;
+export const UNHEALTHY = 7;
+export const STARTING = 8;
+
+/** A service card must reflect every replica, including stopped or unknown ones. */
+export function aggregateServiceStatus(statuses: string[]): string {
+    const order = [ "unhealthy", "unknown", "starting", "paused", "exited", "healthy", "running", "completed" ];
+    if (statuses.length === 0) {
+        return "unknown";
+    }
+    const normalized = statuses.map((status) => order.includes(status) ? status : "unknown");
+    return order.find((status) => normalized.includes(status)) || "unknown";
+}
 
 export function statusName(status : number) : string {
     switch (status) {
@@ -60,6 +74,14 @@ export function statusName(status : number) : string {
             return "created_stack";
         case RUNNING:
             return "running";
+        case COMPLETED:
+            return "completed";
+        case PARTIAL:
+            return "partial";
+        case UNHEALTHY:
+            return "unhealthy";
+        case STARTING:
+            return "starting";
         case EXITED:
             return "exited";
         default:
@@ -75,6 +97,14 @@ export function statusNameShort(status : number) : string {
             return "inactive";
         case RUNNING:
             return "active";
+        case COMPLETED:
+            return "completed";
+        case PARTIAL:
+            return "partial";
+        case UNHEALTHY:
+            return "unhealthy";
+        case STARTING:
+            return "starting";
         case EXITED:
             return "exited";
         default:
@@ -90,8 +120,15 @@ export function statusColor(status : number) : string {
             return "dark";
         case RUNNING:
             return "primary";
-        case EXITED:
+        case COMPLETED:
+            return "primary";
+        case PARTIAL:
+        case STARTING:
+            return "warning";
+        case UNHEALTHY:
             return "danger";
+        case EXITED:
+            return "secondary";
         default:
             return "secondary";
     }

@@ -9,11 +9,10 @@ import {
     COMBINED_TERMINAL_COLS,
     COMBINED_TERMINAL_ROWS,
     CREATED_FILE,
-    CREATED_STACK,
-    EXITED, getCombinedTerminalName,
+    getCombinedTerminalName,
     getComposeTerminalName, getContainerExecTerminalName,
     PROGRESS_TERMINAL_ROWS,
-    RUNNING, TERMINAL_ROWS,
+    TERMINAL_ROWS,
     UNKNOWN
 } from "../common/util-common";
 import { InteractiveTerminal, Terminal } from "./terminal";
@@ -21,11 +20,13 @@ import childProcessAsync from "promisify-child-process";
 import { Settings } from "./settings";
 import { writeStackFiles } from "./stack-files";
 import { execFile } from "node:child_process";
+import { readContainerStates, serviceState, stackPolicy, summarizeStack } from "./stack-status";
 
 export class Stack {
 
     name: string;
     protected _status: number = UNKNOWN;
+    hasActiveContainers?: boolean;
     protected _composeYAML?: string;
     protected _composeENV?: string;
     protected _configFilePath?: string;
@@ -84,6 +85,7 @@ export class Stack {
         return {
             name: this.name,
             status: this._status,
+            hasActiveContainers: this.hasActiveContainers,
             tags: [],
             isManagedByDockge: this.isManagedByDockge,
             composeFileName: this._composeFileName,
@@ -260,14 +262,10 @@ export class Stack {
     }
 
     async updateStatus() {
-        let statusList = await Stack.getStatusList();
-        let status = statusList.get(this.name);
-
-        if (status) {
-            this._status = status;
-        } else {
-            this._status = UNKNOWN;
-        }
+        const stacks = await Stack.getStackList(this.server, true);
+        const stack = stacks.get(this.name);
+        this._status = stack?.status ?? UNKNOWN;
+        this.hasActiveContainers = stack?.hasActiveContainers;
     }
 
     /**
@@ -295,8 +293,8 @@ export class Stack {
         let stackList : Map<string, Stack>;
 
         // Use cached stack list?
-        if (useCacheForManaged && this.managedStackList.size > 0) {
-            stackList = this.managedStackList;
+        if (useCacheForManaged && this.managedStackList.size > 0 && [ ...this.managedStackList.values() ].every((stack) => stack.server === server)) {
+            stackList = new Map(this.managedStackList);
         } else {
             stackList = new Map<string, Stack>();
 
@@ -328,78 +326,62 @@ export class Stack {
             this.managedStackList = new Map(stackList);
         }
 
-        // Get status from docker compose ls
-        let res = await childProcessAsync.spawn("docker", [ "compose", "ls", "--all", "--format", "json" ], {
-            encoding: "utf-8",
-        });
-
-        if (!res.stdout) {
-            return stackList;
-        }
-
-        let composeList = JSON.parse(res.stdout.toString());
-
-        for (let composeStack of composeList) {
-            let stack = stackList.get(composeStack.Name);
-
-            // This stack probably is not managed by Dockge, but we still want to show it
-            if (!stack) {
-                // Skip the dockge stack if it is not managed by Dockge
-                if (composeStack.Name === "dockge") {
-                    continue;
-                }
-                stack = new Stack(server, composeStack.Name);
-                stackList.set(composeStack.Name, stack);
+        // compose ls discovers external projects; container snapshots alone determine status.
+        let discoveryOK = false;
+        try {
+            const res = await childProcessAsync.spawn("docker", [ "compose", "ls", "--all", "--format", "json" ], {
+                encoding: "utf-8",
+                timeout: 10000,
+                maxBuffer: 1024 * 1024,
+            });
+            if (res.code !== 0) {
+                throw new Error("Failed to list Compose projects");
             }
-
-            stack._status = this.statusConvert(composeStack.Status);
-            stack._configFilePath = composeStack.ConfigFiles;
+            const composeList = JSON.parse(res.stdout?.toString() || "[]");
+            for (const composeStack of composeList) {
+                if (typeof composeStack.Name !== "string") {
+                    throw new Error("Invalid Compose project");
+                }
+                let stack = stackList.get(composeStack.Name);
+                if (!stack) {
+                    if (composeStack.Name === "dockge") {
+                        continue;
+                    }
+                    stack = new Stack(server, composeStack.Name);
+                    stackList.set(composeStack.Name, stack);
+                }
+                stack._configFilePath = composeStack.ConfigFiles;
+            }
+            discoveryOK = true;
+        } catch (e) {
+            log.warn("getStackList", "Failed to discover Compose projects");
         }
 
+        // Clear cached green states before every read, including Docker failure/deletion races.
+        for (const stack of stackList.values()) {
+            stack._status = UNKNOWN;
+            stack.hasActiveContainers = undefined;
+        }
+        try {
+            const containers = await readContainerStates();
+            for (const stack of stackList.values()) {
+                const items = containers.filter((container) => container.project === stack.name);
+                // Reread local files: external edits must affect the next poll too.
+                stack._composeYAML = undefined;
+                const policy = stackPolicy(stack.isManagedByDockge ? stack.composeYAML : undefined);
+                const summary = summarizeStack(items, policy);
+                stack._status = !discoveryOK ? UNKNOWN : items.length === 0 && policy.known && stack.isManagedByDockge ? CREATED_FILE : summary.status;
+                stack.hasActiveContainers = summary.hasActiveContainers;
+            }
+        } catch (e) {
+            log.warn("getStackList", "Failed to read container status");
+        }
         return stackList;
     }
 
-    /**
-     * Get the status list, it will be used to update the status of the stacks
-     * Not all status will be returned, only the stack that is deployed or created to `docker compose` will be returned
-     */
-    static async getStatusList() : Promise<Map<string, number>> {
-        let statusList = new Map<string, number>();
-
-        let res = await childProcessAsync.spawn("docker", [ "compose", "ls", "--all", "--format", "json" ], {
-            encoding: "utf-8",
-        });
-
-        if (!res.stdout) {
-            return statusList;
-        }
-
-        let composeList = JSON.parse(res.stdout.toString());
-
-        for (let composeStack of composeList) {
-            statusList.set(composeStack.Name, this.statusConvert(composeStack.Status));
-        }
-
-        return statusList;
-    }
-
-    /**
-     * Convert the status string from `docker compose ls` to the status number
-     * Input Example: "exited(1), running(1)"
-     * @param status
-     */
-    static statusConvert(status : string) : number {
-        if (status.startsWith("created")) {
-            return CREATED_STACK;
-        } else if (status.includes("exited")) {
-            // If one of the service is exited, we consider the stack is exited
-            return EXITED;
-        } else if (status.startsWith("running")) {
-            // If there is no exited services, there should be only running services
-            return RUNNING;
-        } else {
-            return UNKNOWN;
-        }
+    /** All entry points use the same container and Compose policy semantics. */
+    static async getStatusList(server: DockgeServer) : Promise<Map<string, number>> {
+        return new Map([ ...await this.getStackList(server, true) ].map(([ name, stack ]) => [ name, stack.status ]));
     }
 
     static async getStack(server: DockgeServer, stackName: string, skipFSOperations = false) : Promise<Stack> {
@@ -491,10 +473,10 @@ export class Stack {
             throw new Error("Failed to pull, please check the terminal output for more information.");
         }
 
-        // If the stack is not running, we don't need to restart it
+        // Keep stopped stacks stopped; active abnormal/partial stacks still need rebuilding.
         await this.updateStatus();
         log.debug("update", "Status: " + this.status);
-        if (this.status !== RUNNING) {
+        if (!this.hasActiveContainers) {
             return exitCode;
         }
 
@@ -538,59 +520,27 @@ export class Stack {
     }
 
     async getServiceStatusList(strict = false) {
-        let statusList = new Map<string, Array<object>>();
-
+        const statusList = new Map<string, Array<object>>();
         try {
-            let res = await childProcessAsync.spawn("docker", this.getComposeOptions("ps", "--format", "json"), {
-                cwd: this.path,
-                encoding: "utf-8",
-                ...(strict ? {
-                    timeout: 10000,
-                    maxBuffer: 1024 * 1024,
-                    killSignal: "SIGKILL",
-                } : {}),
-            });
-
-            if (strict && res.code !== 0) {
-                throw new Error("Failed to get service status");
-            }
-
-            if (!res.stdout) {
-                return statusList;
-            }
-
-            let lines = res.stdout?.toString().split("\n");
-
-            const addLine = (obj: { Service: string, State: string, Name: string, Health: string }) => {
-                if (strict && (!obj || typeof obj.Service !== "string" || typeof obj.State !== "string" || typeof obj.Name !== "string")) {
-                    throw new Error("Invalid service status response");
+            const containers = await readContainerStates(this.name);
+            const policy = stackPolicy(this.isManagedByDockge ? this.composeYAML : undefined);
+            const items = containers.filter((container) => container.project === this.name);
+            const summary = summarizeStack(items, policy);
+            this._status = summary.status;
+            this.hasActiveContainers = summary.hasActiveContainers;
+            for (const container of items) {
+                if (!statusList.has(container.service)) {
+                    statusList.set(container.service, []);
                 }
-                if (!statusList.has(obj.Service)) {
-                    statusList.set(obj.Service, []);
-                }
-                statusList.get(obj.Service)?.push({
-                    status: obj.Health || obj.State,
-                    name: obj.Name
+                statusList.get(container.service)?.push({
+                    status: serviceState(container, policy),
+                    name: container.name,
                 });
-            };
-
-            for (let line of lines) {
-                try {
-                    let obj = JSON.parse(line);
-                    if (obj instanceof Array) {
-                        obj.forEach(addLine);
-                    } else {
-                        addLine(obj);
-                    }
-                } catch (e) {
-                    if (strict && line.trim()) {
-                        throw new Error("Invalid service status response");
-                    }
-                }
             }
-
             return statusList;
         } catch (e) {
+            this._status = UNKNOWN;
+            this.hasActiveContainers = undefined;
             if (strict) {
                 throw e;
             }

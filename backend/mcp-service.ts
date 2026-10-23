@@ -5,6 +5,7 @@ import composerize from "composerize";
 import type { DockgeServer } from "./dockge-server";
 import type { DockgeSocket } from "./util-server";
 import { Stack } from "./stack";
+import { readContainerStates, stackPolicy } from "./stack-status";
 import { composePlan, ComposeSnapshot, parseCompose, stackRevision } from "./mcp-compose";
 
 type Arguments = Record<string, unknown>;
@@ -48,7 +49,7 @@ export class McpService {
                 case "doctor": {
                     let dockerAvailable = false;
                     try {
-                        await Stack.getStatusList();
+                        await readContainerStates();
                         dockerAvailable = true;
                     } catch {
                         // Return availability only; Docker errors can contain sensitive host data.
@@ -67,6 +68,7 @@ export class McpService {
                         this.requireScope(identity, "secrets");
                     }
                     const stack = await this.getStack(args);
+                    await stack.updateStatus();
                     const result = { ...this.metadata(stack),
                         revision: stackRevision(this.snapshot(stack.name)) };
                     return args.includeSecrets === true ? { ...result,
@@ -75,8 +77,9 @@ export class McpService {
                 }
                 case "stack_ps": {
                     const stack = await this.getStack(args);
+                    const services = await this.serviceStatus(stack);
                     return { ...this.metadata(stack),
-                        services: await this.serviceStatus(stack) };
+                        services };
                 }
                 case "service_status": {
                     const stack = await this.getStack(args);
@@ -172,6 +175,7 @@ export class McpService {
         return {
             name: stack.name,
             status: stack.status,
+            hasActiveContainers: stack.hasActiveContainers,
             isManagedByDockge: stack.isManagedByDockge,
             endpoint: "",
         };
@@ -437,11 +441,12 @@ export class McpService {
             let servicesOK = !requireServices;
             try {
                 services = await this.serviceStatus(await this.getStack(args));
-                const serviceMap = parseCompose(current.composeYAML).services;
-                const expected = args.services as string[] | undefined ?? Object.keys(serviceMap && typeof serviceMap === "object" ? serviceMap : {});
-                servicesOK = !requireServices || (expected.length > 0 && expected.every((service) => {
+                const policy = stackPolicy(current.composeYAML);
+                const expected = args.services as string[] | undefined ?? [ ...policy.services ].filter(([ service, options ]) => options.replicas > 0 && (!options.optional || services.some((item) => item.service === service))).map(([ service ]) => service);
+                servicesOK = !requireServices || (policy.known && expected.length > 0 && expected.every((service) => {
                     const containers = services.find((item) => item.service === service)?.containers;
-                    return !!containers?.length && containers.every((item) => [ "running", "healthy", "started", "up" ].includes(item.status.toLowerCase()));
+                    const replicas = policy.services.get(service)?.replicas ?? 1;
+                    return !!containers?.length && containers.length >= replicas && containers.every((item) => [ "running", "healthy", "completed" ].includes(item.status.toLowerCase()));
                 }));
             } catch {
                 servicesOK = !requireServices;
