@@ -160,3 +160,11 @@ test("service cards aggregate the worst replica instead of displaying the first"
     assert.equal(aggregateServiceStatus([ "healthy", "unexpected" ]), "unknown");
     assert.equal(aggregateServiceStatus([]), "unknown");
 });
+
+test("explicit profiles and wildcard require their services while inactive profiles remain optional", () => {
+    const items = [ container(), container("configurator", { state: "exited" }) ];
+    assert.equal(summarizeStack(items, stackPolicy(erpCompose)).status, RUNNING);
+    assert.equal(summarizeStack(items, stackPolicy(erpCompose, [ "setup" ])).status, PARTIAL);
+    assert.equal(summarizeStack(items, stackPolicy(erpCompose, [ "*" ])).status, PARTIAL);
+    assert.equal(stackPolicy("services:\n  web:\n    image: web\n    profiles: ['${PROFILE}']\n").known, false);
+});

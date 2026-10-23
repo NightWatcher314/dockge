@@ -21,6 +21,7 @@ import { Settings } from "./settings";
 import { writeStackFiles } from "./stack-files";
 import { execFile } from "node:child_process";
 import { readContainerStates, serviceState, stackPolicy, summarizeStack } from "./stack-status";
+import { parse as parseDotenv } from "dotenv";
 
 export class Stack {
 
@@ -268,6 +269,36 @@ export class Stack {
         this.hasActiveContainers = stack?.hasActiveContainers;
     }
 
+    /** Use the same known profile configuration as Docker Compose, without expanding secrets. */
+    getStatusPolicy(composeYAML?: string, composeENV?: string) {
+        if (!this.isManagedByDockge) {
+            return stackPolicy();
+        }
+        try {
+            const profilesFromFile = (filename: string) => {
+                try {
+                    return parseDotenv(fs.readFileSync(filename))["COMPOSE_PROFILES"];
+                } catch (error) {
+                    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+                        return undefined;
+                    }
+                    throw error;
+                }
+            };
+            const globalProfiles = profilesFromFile(path.join(this.server.stacksDir, "global.env"));
+            const localProfiles = composeENV === undefined ? profilesFromFile(path.join(this.path, ".env")) : parseDotenv(composeENV)["COMPOSE_PROFILES"];
+            const configured = process.env.COMPOSE_PROFILES ?? localProfiles ?? globalProfiles ?? "";
+            const profiles = configured.split(",").map((profile) => profile.trim()).filter(Boolean);
+            const policy = stackPolicy(composeYAML ?? fs.readFileSync(path.join(this.path, this._composeFileName), "utf-8"), profiles);
+            if (configured.includes("$") || profiles.some((profile) => !/^(\*|[a-zA-Z0-9][a-zA-Z0-9_.-]*)$/.test(profile))) {
+                policy.known = false;
+            }
+            return policy;
+        } catch {
+            return stackPolicy("");
+        }
+    }
+
     /**
      * Checks if a compose file exists in the specified directory.
      * @async
@@ -366,9 +397,7 @@ export class Stack {
             const containers = await readContainerStates();
             for (const stack of stackList.values()) {
                 const items = containers.filter((container) => container.project === stack.name);
-                // Reread local files: external edits must affect the next poll too.
-                stack._composeYAML = undefined;
-                const policy = stackPolicy(stack.isManagedByDockge ? stack.composeYAML : undefined);
+                const policy = stack.getStatusPolicy();
                 const summary = summarizeStack(items, policy);
                 stack._status = !discoveryOK ? UNKNOWN : items.length === 0 && policy.known && stack.isManagedByDockge ? CREATED_FILE : summary.status;
                 stack.hasActiveContainers = summary.hasActiveContainers;
@@ -523,7 +552,7 @@ export class Stack {
         const statusList = new Map<string, Array<object>>();
         try {
             const containers = await readContainerStates(this.name);
-            const policy = stackPolicy(this.isManagedByDockge ? this.composeYAML : undefined);
+            const policy = this.getStatusPolicy();
             const items = containers.filter((container) => container.project === this.name);
             const summary = summarizeStack(items, policy);
             this._status = summary.status;

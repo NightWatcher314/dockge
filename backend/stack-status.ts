@@ -27,7 +27,7 @@ export interface StackPolicy {
 }
 
 /** Read only local Compose structure; never interpolate secrets or spawn compose config. */
-export function stackPolicy(compose?: string): StackPolicy {
+export function stackPolicy(compose?: string, activeProfiles: string[] = []): StackPolicy {
     const services = new Map<string, ServicePolicy>();
     if (compose === undefined) {
         return { services,
@@ -54,9 +54,13 @@ export function stackPolicy(compose?: string): StackPolicy {
             if (typeof replicas !== "number" || !Number.isInteger(replicas) || replicas < 0) {
                 known = false;
             }
+            const profiles = service.profiles;
+            if (profiles !== undefined && (!Array.isArray(profiles) || profiles.some((profile) => typeof profile !== "string" || profile.includes("$")))) {
+                known = false;
+            }
             services.set(name, { task,
                 replicas: typeof replicas === "number" ? replicas : 1,
-                optional: Array.isArray(service.profiles) && service.profiles.length > 0 });
+                optional: Array.isArray(profiles) && profiles.length > 0 && !activeProfiles.includes("*") && !profiles.some((profile) => activeProfiles.includes(profile)) });
             const depends = service.depends_on;
             if (depends && typeof depends === "object" && !Array.isArray(depends)) {
                 for (const [ dependency, options ] of Object.entries(depends)) {

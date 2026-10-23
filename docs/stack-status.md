@@ -18,8 +18,8 @@
 
 每次列表刷新执行一次按 Compose project label 筛选的 `docker ps -aq`，再每批最多 100 个容器执行带 `--format` 的 inspect。只读取 project/service/oneoff/task labels、容器名和必要 State 字段；不读取 Env、完整 inspect、健康检查输出或 Docker 错误原文。`docker compose ls` 仅发现项目；删除竞态、输出不完整或读取失败清空原有绿色缓存。`compose run` 的 oneoff 容器不参与栈状态。
 
-本地管理的 Compose 文件提供默认服务、依赖、任务和副本数。未出现的 profile 服务、`replicas: 0` / `scale: 0` 服务不算缺失；已出现的 profile 服务照常参与判定。默认服务的必要依赖仍需存在，`required: false` 依赖除外。MCP `stack_verify` 接受正常运行和明确任务的 completed，拒绝启动中、异常、常驻服务退出、缺少默认服务或副本。显式 `services` 可缩小验证范围。
+本地管理的 Compose 文件提供默认服务、依赖、任务和副本数。未激活且未出现的 profile 服务、`replicas: 0` / `scale: 0` 服务不算缺失；已出现的 profile 服务照常参与判定。默认服务的必要依赖仍需存在，`required: false` 依赖除外。MCP `stack_verify` 接受正常运行和明确任务的 completed，拒绝启动中、异常、常驻服务退出、缺少默认服务或副本。显式 `services` 可缩小验证范围，但仍要求栈策略可解析。
 
 `hasActiveContainers` 独立描述运行、重启或暂停容器。页面停止/重启按钮与镜像更新后的重建据此判断；部分停止或异常栈也可启动以恢复服务。
 
-界限：状态不是应用可用性证明，业务连通性需另行验证。未管理项目只能依据现有容器与显式容器任务 label，无法发现缺少的 Compose 服务。为避免每栈启动 Compose 配置进程，不展开环境变量、include、extends 或多文件覆盖；include、extends 和无法确定的副本数保守显示 unknown。profile 依据默认服务与实际已出现的容器推断，不追踪外部命令历史或 `COMPOSE_PROFILES` 激活状态。轮询反映采样时刻，不保证 Docker 后续状态不变。
+界限：状态不是应用可用性证明，业务连通性需另行验证。未管理项目只能依据现有容器与显式容器任务 label，无法发现缺少的 Compose 服务。为避免每栈启动 Compose 配置进程，不展开环境变量、include、extends 或多文件覆盖；include、extends 和无法确定的副本数保守显示 unknown。profile 除默认服务与实际已出现的容器外，还读取 Dockge 已知的 `COMPOSE_PROFILES`：进程环境优先于本地 `.env`，本地优先于 `global.env`，支持 `*`。显式激活的 profile 服务缺失时不能显示正常；未解析的 `$` 插值保守显示 unknown。不追踪外部 `--profile` 命令历史。轮询反映采样时刻，不保证 Docker 后续状态不变。

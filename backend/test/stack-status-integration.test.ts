@@ -141,3 +141,48 @@ test("update restarts stacks with active abnormal containers but preserves stopp
     await stack.update(socket);
     assert.deepEqual(commands.map((args) => args[1]), [ "pull" ]);
 });
+
+test("fresh profile policy honors process, local and global precedence and MCP rejects missing active services", async (t) => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "dockge-profiles-"));
+    const previous = process.env.COMPOSE_PROFILES;
+    delete process.env.COMPOSE_PROFILES;
+    t.after(async () => {
+        if (previous === undefined) {
+            delete process.env.COMPOSE_PROFILES;
+        } else {
+            process.env.COMPOSE_PROFILES = previous;
+        }
+        await fs.rm(dir, { recursive: true,
+            force: true });
+    });
+    await fs.mkdir(path.join(dir, "test"));
+    await fs.writeFile(path.join(dir, "test", "compose.yaml"), compose);
+    const server = { stacksDir: dir } as DockgeServer;
+    const stack = await Stack.getStack(server, "test");
+    const service = new McpService(server);
+    t.mock.method(Stack.prototype, "getServiceStatusList", async () => new Map([
+        [ "web", [{ name: "web-1",
+            status: "healthy" }]],
+        [ "migrate", [{ name: "migrate-1",
+            status: "completed" }]],
+    ]));
+    const verify = (services?: string[]) => service.execute("stack_verify", { name: "test",
+        timeoutSeconds: 0,
+        services }, identity);
+    assert.equal((await verify()).ok, true);
+    await fs.writeFile(path.join(dir, "global.env"), "COMPOSE_PROFILES=setup\nOTHER=unrelated-secret\n");
+    assert.equal(stack.getStatusPolicy().services.get("optional")?.optional, false);
+    assert.equal((await verify()).ok, false);
+    await fs.writeFile(path.join(dir, "test", ".env"), "COMPOSE_PROFILES=other\n");
+    assert.equal(stack.getStatusPolicy().services.get("optional")?.optional, true);
+    assert.equal((await verify()).ok, true);
+    process.env.COMPOSE_PROFILES = "*";
+    assert.equal(stack.getStatusPolicy().services.get("optional")?.optional, false);
+    assert.equal((await verify()).ok, false);
+    process.env.COMPOSE_PROFILES = "";
+    assert.equal((await verify()).ok, true);
+    delete process.env.COMPOSE_PROFILES;
+    await fs.writeFile(path.join(dir, "test", ".env"), "COMPOSE_PROFILES=${PROFILE}\n");
+    assert.equal(stack.getStatusPolicy().known, false);
+    assert.equal((await verify([ "web" ])).ok, false);
+});

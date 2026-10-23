@@ -5,7 +5,7 @@ import composerize from "composerize";
 import type { DockgeServer } from "./dockge-server";
 import type { DockgeSocket } from "./util-server";
 import { Stack } from "./stack";
-import { readContainerStates, stackPolicy } from "./stack-status";
+import { readContainerStates } from "./stack-status";
 import { composePlan, ComposeSnapshot, parseCompose, stackRevision } from "./mcp-compose";
 
 type Arguments = Record<string, unknown>;
@@ -440,8 +440,9 @@ export class McpService {
             const current = this.snapshot(name);
             let servicesOK = !requireServices;
             try {
-                services = await this.serviceStatus(await this.getStack(args));
-                const policy = stackPolicy(current.composeYAML);
+                const stack = await this.getStack(args);
+                services = await this.serviceStatus(stack);
+                const policy = stack.getStatusPolicy(current.composeYAML, current.composeENV);
                 const expected = args.services as string[] | undefined ?? [ ...policy.services ].filter(([ service, options ]) => options.replicas > 0 && (!options.optional || services.some((item) => item.service === service))).map(([ service ]) => service);
                 servicesOK = !requireServices || (policy.known && expected.length > 0 && expected.every((service) => {
                     const containers = services.find((item) => item.service === service)?.containers;
