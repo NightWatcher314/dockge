@@ -1,6 +1,6 @@
 services:
   dockge:
-    image: harbor.iprc.top/zhengzifu/dockge:1.5.1-nightwatcher.1
+    image: harbor.iprc.top/zhengzifu/dockge:1.5.1-nightwatcher.2
     restart: unless-stopped
     ports:
       # Host Port : Container Port
